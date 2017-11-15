@@ -1,19 +1,23 @@
-import md5
+from hashlib import md5
 import types
 from functools import wraps
 
 from django.http import HttpResponse
-from django.core.cache import cache
 from django.utils.decorators import available_attrs
 from django.views.generic.base import TemplateResponseMixin
 from django.conf import settings
 
-from ultracache import _thread_locals
-from ultracache.utils import cache_meta, get_current_site_pk
+from . import _thread_locals
+from .utils import cache_meta, get_current_site_pk
+from .cache import get_cache
+from .settings import CACHE_TIMEOUT
 
 
-def cached_get(timeout, *params):
 
+def cached_get(*params, **kwargs):
+    timeout = kwargs.get('timeout') or CACHE_TIMEOUT
+    backend = kwargs.get('backend')
+    cache = get_cache(backend)
     def decorator(view_func):
         @wraps(view_func, assigned=available_attrs(view_func))
         def _wrapped_view(view_or_request, *args, **kwargs):
@@ -46,9 +50,9 @@ def cached_get(timeout, *params):
             # path is provided. get_full_path includes the querystring and is
             # the more conservative approach but makes it trivially easy for a
             # request to bust through the cache.
-            if not set(params).intersection(set((
+            if not set(params).intersection({
                 "request.get_full_path()", "request.path", "request.path_info"
-            ))):
+            }):
                 li.append(request.get_full_path())
 
             if "django.contrib.sites" in settings.INSTALLED_APPS:
@@ -62,11 +66,14 @@ def cached_get(timeout, *params):
 
             # Extend cache key with custom variables
             for param in params:
-                if not isinstance(param, types.StringType):
-                    param = str(param)
-                li.append(eval(param))
+                if callable(param):
+                    param = param()
 
-            hashed = md5.new(":".join([str(l) for l in li])).hexdigest()
+                li.append(param)
+                # No eval
+                # li.append(eval(param))
+
+            hashed = md5(":".join([str(l) for l in li])).hexdigest()
             cache_key = "ucache-get-%s" % hashed
             cached = cache.get(cache_key, None)
             if cached is None:

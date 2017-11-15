@@ -45,6 +45,7 @@ def nginx_more_examples(path):
     # twisted/monitor.py on how to handle the messages. You will need pika
     # installed.
     rabbit_host = "192.1.2.5"
+    # FIXME
     connection = pika.BlockingConnection(
         pika.ConnectionParameters(host=rabbit_host)
     )

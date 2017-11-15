@@ -2,20 +2,15 @@ import sys
 
 from django.core.cache import cache
 from django.contrib.sites.models import Site
+
+from ultracache.settings import MAX_SIZE
+
 try:
     from django.contrib.sites.shortcuts import get_current_site
 except ImportError:
     from django.contrib.sites.models import get_current_site
-from django.conf import settings
 
 
-# The metadata itself can"t be allowed to grow endlessly. This value is the
-# maximum size in bytes of a metadata list. If your caching backend supports
-# compression set a larger value.
-try:
-    MAX_SIZE = settings.ULTRACACHE["max-registry-value-size"]
-except (AttributeError, KeyError):
-    MAX_SIZE = 25000
 
 
 def reduce_list_size(li):
