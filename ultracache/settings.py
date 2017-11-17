@@ -13,6 +13,7 @@ DEFAULT_SETTINGS = {
     "invalidate": True,
     "backend": None,
     "timeout": 300,
+    # "purge_handler": "ultracache.handlers.purge_handler",
 }
 
 SETTINGS = dict(DEFAULT_SETTINGS)

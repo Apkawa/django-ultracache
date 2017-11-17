@@ -8,16 +8,29 @@ from django.views.generic.base import TemplateResponseMixin
 from django.conf import settings
 
 from . import _thread_locals
-from .utils import cache_meta, get_current_site_pk
+from .utils import cache_meta, get_current_site_pk, get_cache_context, build_cache_key, serialize_response, \
+    restore_response
 from .cache import get_cache
 from .settings import CACHE_TIMEOUT
 
+
+def allow_purge(view, request, *args, **kwargs):
+    return request.META.get('HTTP_X_CACHE_PURGE')
+
+
+def is_messages(request):
+    try:
+        return len(request._messages) > 0
+    except (AttributeError, TypeError):
+        pass
+    return False
 
 
 def cached_get(*params, **kwargs):
     timeout = kwargs.get('timeout') or CACHE_TIMEOUT
     backend = kwargs.get('backend')
     cache = get_cache(backend)
+
     def decorator(view_func):
         @wraps(view_func, assigned=available_attrs(view_func))
         def _wrapped_view(view_or_request, *args, **kwargs):
@@ -30,73 +43,46 @@ def cached_get(*params, **kwargs):
             if not hasattr(_thread_locals, "ultracache_request"):
                 setattr(_thread_locals, "ultracache_request", request)
 
-           # If request not GET or HEAD never cache
+            # If request not GET or HEAD never cache
             if request.method.lower() not in ("get", "head"):
                 return view_func(view_or_request, *args, **kwargs)
 
             # If request contains messages never cache
-            l = 0
-            try:
-                l = len(request._messages)
-            except (AttributeError, TypeError):
-                pass
-            if l:
+            if is_messages(request):
                 return view_func(view_or_request, *args, **kwargs)
 
-            # Compute a cache key
-            li = [str(view_or_request.__class__), view_func.__name__]
-
-            # request.get_full_path is implicitly added it no other request
-            # path is provided. get_full_path includes the querystring and is
-            # the more conservative approach but makes it trivially easy for a
-            # request to bust through the cache.
-            if not set(params).intersection({
-                "request.get_full_path()", "request.path", "request.path_info"
-            }):
-                li.append(request.get_full_path())
-
-            if "django.contrib.sites" in settings.INSTALLED_APPS:
-                li.append(get_current_site_pk(request))
-
-            # Pre-sort kwargs
-            keys = kwargs.keys()
-            keys.sort()
-            for key in keys:
-                li.append("%s,%s" % (key, kwargs[key]))
-
-            # Extend cache key with custom variables
-            for param in params:
-                if callable(param):
-                    param = param()
-
-                li.append(param)
-                # No eval
-                # li.append(eval(param))
-
-            hashed = md5(":".join([str(l) for l in li])).hexdigest()
-            cache_key = "ucache-get-%s" % hashed
+            cache_context = get_cache_context(
+                request=request,
+                view_or_request=view_or_request,
+                view_func=view_func,
+                params=params,
+                args=args,
+                kwargs=kwargs
+            )
+            cache_key = build_cache_key(context=cache_context, prefix="ucache-get-")
             cached = cache.get(cache_key, None)
-            if cached is None:
-                # The get view as outermost caller may bluntly set _ultracache
-                request._ultracache = []
-                response = view_func(view_or_request, *args, **kwargs)
-                content = getattr(response, "rendered_content", None) \
-                    or getattr(response, "content", None)
-                if content is not None:
-                    headers = getattr(response, "_headers", {})
-                    cache.set(
-                        cache_key,
-                        {"content": content, "headers": headers},
-                        timeout
-                    )
-                    cache_meta(request, cache_key)
-            else:
-                response = HttpResponse(cached["content"])
-                # Headers has a non-obvious format
-                for k, v in cached["headers"].items():
-                    response[v[0]] = v[1]
+            if cached and allow_purge(view_func, request, *args, **kwargs):
+                # cache.delete(cache_key)
+                cached = None
+
+            if cached is not None:
+                response = restore_response(cached)
+                return response
+
+            # The get view as outermost caller may bluntly set _ultracache
+            request._ultracache = []
+            response = view_func(view_or_request, *args, **kwargs)
+            data = serialize_response(response)
+            if data is not None:
+                cache.set(
+                    cache_key,
+                    data,
+                    timeout
+                )
+                cache_meta(request, cache_key)
 
             return response
 
         return _wrapped_view
+
     return decorator

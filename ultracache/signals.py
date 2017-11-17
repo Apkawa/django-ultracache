@@ -11,7 +11,6 @@ from .settings import invalidate, purger
 from .cache import cache
 
 
-
 @receiver(post_save)
 def on_post_save(sender, **kwargs):
     """Expire ultracache cache keys affected by this object

@@ -1,7 +1,9 @@
 import sys
-
+import hashlib
+from django.conf import settings
 from django.core.cache import cache
 from django.contrib.sites.models import Site
+from django.http import HttpResponse
 
 from ultracache.settings import MAX_SIZE
 
@@ -9,8 +11,6 @@ try:
     from django.contrib.sites.shortcuts import get_current_site
 except ImportError:
     from django.contrib.sites.models import get_current_site
-
-
 
 
 def reduce_list_size(li):
@@ -180,3 +180,60 @@ def get_current_site_pk(request):
     """Seemingly pointless function is so calling code doesn't have to worry
     about the import issues between Django 1.6 and later."""
     return get_current_site(request).pk
+
+
+def get_cache_context(request, view_or_request, view_func, params, args, kwargs):
+    # Compute a cache key
+    li = [str(view_or_request.__class__), view_func.__name__]
+
+    # request.get_full_path is implicitly added it no other request
+    # path is provided. get_full_path includes the querystring and is
+    # the more conservative approach but makes it trivially easy for a
+    # request to bust through the cache.
+    if not set(params).intersection({
+        "request.get_full_path()", "request.path", "request.path_info"
+    }):
+        li.append(request.get_full_path())
+
+    if "django.contrib.sites" in settings.INSTALLED_APPS:
+        li.append(get_current_site_pk(request))
+
+    li.extend(args)
+
+    # Pre-sort kwargs
+    keys = kwargs.keys()
+    keys.sort()
+    for key in keys:
+        li.append("%s,%s" % (key, kwargs[key]))
+
+    # Extend cache key with custom variables
+    for param in params:
+        if callable(param):
+            param = param()
+
+        li.append(param)
+    return li
+
+
+def build_cache_key(context, prefix="ucache-get-"):
+    hashed = hashlib.md5(":".join([str(l) for l in context])).hexdigest()
+    cache_key = "%s%s" % (prefix, hashed)
+    return cache_key
+
+
+def serialize_response(response):
+    content = getattr(response, "rendered_content", None) \
+              or getattr(response, "content", None)
+
+    if content is not None:
+        headers = getattr(response, "_headers", {})
+        return {"content": content, "headers": headers}
+
+
+def restore_response(serialized_response):
+    response = HttpResponse(serialized_response["content"])
+    # Headers has a non-obvious format
+    for k, v in serialized_response["headers"].items():
+        response[v[0]] = v[1]
+
+    return response
